@@ -9,7 +9,6 @@ Run a VPN connection in an isolated Linux **network namespace + mount namespace*
 - **Per-application VPN routing** using Linux network namespaces
 - **DNS isolation** using a persistent mount namespace with an overlay on `/etc`
 - `airlock up` / `airlock run -- …` / `airlock down` lifecycle
-- Config-driven authentication (no hard dependency on `pass`)
 - Works with **OpenConnect** (AnyConnect-compatible VPNs)
 
 
@@ -153,8 +152,6 @@ Example config:
 ```bash
 AIRLOCK_CONFIG_NAME='myvpn'
 AIRLOCK_NAMESPACE='myvpn'
-AIRLOCK_DRIVER='openconnect'
-AIRLOCK_FW_BACKEND='auto'
 
 OPENCONNECT_SERVER='vpn.example.com'
 OPENCONNECT_USER='alice'
