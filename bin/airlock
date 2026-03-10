@@ -108,13 +108,15 @@ cmd_status() {
     status='up'
   fi
 
-  printf 'profile=%s\n' "$AIRLOCK_CONFIG_NAME"
-  printf 'namespace=%s\n' "$AIRLOCK_NAMESPACE"
-  printf 'status=%s\n' "$status"
+  _airlock_emit "profile=${AIRLOCK_CONFIG_NAME}" magenta
+  _airlock_emit "namespace=${AIRLOCK_NAMESPACE}" magenta
 
   if [[ "$status" == 'up' ]]; then
-    printf 'openconnect_pid=%s\n' "$(airlock_openconnect_pid)"
-    printf 'mountns_pid=%s\n' "$(airlock_mountns_pid)"
+    _airlock_emit "openconnect_pid=$(airlock_openconnect_pid)" magenta
+    _airlock_emit "mountns_pid=$(airlock_mountns_pid)" magenta
+    _airlock_emit "status=UP" green
+  else
+    _airlock_emit "status=DOWN" red
   fi
 }
 

@@ -1,43 +1,43 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Usage: exec-with-env0.sh <cmd> [args...]
-# Reads NUL-separated KEY=VALUE entries from stdin, exports them, then execs the command.
-
-is_valid_ident() {
-  [[ "$1" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]
-}
+is_valid_ident() { [[ "$1" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; }
 
 drop_var() {
   case "$1" in
-    # Airlock/sudo internals
-    AIRLOCK_*|SUDO_*)
-      return 0
-      ;;
-
-    # Exported bash functions show up as BASH_FUNC_name%% and are not safe/portable to replay
-    BASH_FUNC_*)
-
-      return 0
-      ;;
-
+    AIRLOCK_*|SUDO_*|BASH_FUNC_* ) return 0 ;;
   esac
-
-  # Drop anything that isn't a legal shell variable name
   is_valid_ident "$1" || return 0
-
   return 1
 }
 
-while IFS= read -r -d '' kv; do
-  key="${kv%%=*}"
-  val="${kv#*=}"
+read_env0_from_fd() {
+  local fd="$1" kv key val
+  while IFS= read -r -d '' kv <&"$fd"; do
+    key="${kv%%=*}"
+    val="${kv#*=}"
+    drop_var "$key" && continue
+    export "$key=$val"
+  done
+}
 
-  if drop_var "$key"; then
-    continue
+# Prefer a FIFO provided by caller; otherwise read from stdin
+if [[ -n "${AIRLOCK_ENV_FIFO:-}" ]]; then
+  exec 3<"$AIRLOCK_ENV_FIFO"
+  unset AIRLOCK_ENV_FIFO
+  read_env0_from_fd 3
+  exec 3<&-
+else
+  read_env0_from_fd 0
+fi
+
+# If caller provided a desired working directory, try to use it.
+# If it's not accessible inside the namespace, fall back to $HOME, then /.
+if [[ -n "${AIRLOCK_CWD:-}" ]]; then
+  if ! cd -- "$AIRLOCK_CWD" 2>/dev/null; then
+    cd -- "${HOME:-/}" 2>/dev/null || cd /
   fi
-
-  export "$key=$val"
-done
+  unset AIRLOCK_CWD
+fi
 
 exec "$@"

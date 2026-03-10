@@ -679,26 +679,54 @@ airlock_nsenter_as_user() {
   local helper="${AIRLOCK_LIBEXEC_DIR}/airlock/exec-with-env0.sh"
   [[ -x "$helper" ]] || airlock_die "Missing helper: $helper"
 
-  # Snapshot caller env as NUL-separated stream (user env, since airlock should refuse root)
-  # Then enter namespaces as root and drop to $user using setpriv.
+  airlock_require_cmd mkfifo rm env
+
+  local fifo=''       # init for set -u safety
+  local writer=''     # init for set -u safety
+  local rc=0
+
+  cleanup() {
+    # Kill writer if still around
+    if [[ -n "${writer:-}" ]]; then
+      kill "$writer" 2>/dev/null || true
+      wait "$writer" 2>/dev/null || true
+    fi
+
+    # Remove FIFO
+    if [[ -n "${fifo:-}" ]]; then
+      rm -f -- "$fifo" 2>/dev/null || true
+    fi
+  }
+  trap cleanup RETURN
+
+  fifo="$(mktemp -u "${XDG_RUNTIME_DIR:-/tmp}/airlock-env.${AIRLOCK_CONFIG_NAME}.XXXXXX")"
+  mkfifo -m 600 "$fifo"
+
+  ( env -0 >"$fifo" ) &
+  writer="$!"
+
   if command -v setpriv >/dev/null 2>&1; then
     local uid gid
     uid="$(id -u "$user")" || airlock_die "Unknown user: $user"
     gid="$(id -g "$user")" || airlock_die "Unknown user: $user"
 
+    set +e
     airlock_nsenter setpriv \
       --reuid "$uid" \
       --regid "$gid" \
       --init-groups \
-      -- "$helper" "$@" < <(env -0)
-
-    return $?
+      -- env AIRLOCK_ENV_FIFO="$fifo" AIRLOCK_CWD="$PWD" "$helper" "$@"
+    rc=$?
+    set -e
+    return "$rc"
   fi
 
-  # Fallback: runuser (also avoids sudoers)
   if command -v runuser >/dev/null 2>&1; then
-    airlock_nsenter runuser -u "$user" -- "$helper" "$@" < <(env -0)
-    return $?
+    set +e
+    airlock_nsenter runuser -u "$user" -- env AIRLOCK_ENV_FIFO="$fifo" AIRLOCK_CWD="$PWD" "$helper" "$@"
+    rc=$?
+    set -e
+    return "$rc"
   fi
 
   airlock_die "Need setpriv or runuser to drop privileges without sudo"
