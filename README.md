@@ -151,8 +151,16 @@ Minimal required variables for OpenConnect:
 Example pattern:
 
 ```bash
-OPENCONNECT_SERVER="vpn.example.com"
-OPENCONNECT_USER="alice"
+AIRLOCK_CONFIG_NAME='myvpn'
+AIRLOCK_NAMESPACE='myvpn'
+AIRLOCK_DRIVER='openconnect'
+AIRLOCK_FW_BACKEND='auto'
+
+OPENCONNECT_SERVER='vpn.example.com'
+OPENCONNECT_USER='alice'
+OPENCONNECT_USERGROUP='mygroup' # optional, only if your VPN uses group-based auth
+OPENCONNECT_EXTRA_ARGS=(--no-xmlpost) # optional, any extra args to pass to openconnect
+
 AIRLOCK_AUTH_FUNCTION='my_auth_payload'
 
 my_auth_payload() {
