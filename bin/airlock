@@ -1,0 +1,205 @@
+#!/usr/bin/env bash
+# shellcheck shell=bash
+set -euo pipefail
+
+AIRLOCK_BIN_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+AIRLOCK_LIBEXEC_DIR="${AIRLOCK_LIBEXEC_DIR:-$(cd -- "${AIRLOCK_BIN_DIR}/../libexec" && pwd -P)}"
+export AIRLOCK_LIBEXEC_DIR
+
+# shellcheck source=/dev/null
+source "${AIRLOCK_LIBEXEC_DIR}/airlock/refuse_root.sh"
+airlock_refuse_root
+
+# shellcheck source=/dev/null
+source "${AIRLOCK_LIBEXEC_DIR}/airlock/common.sh"
+
+# shellcheck source=/dev/null
+source "${AIRLOCK_LIBEXEC_DIR}/airlock/cli-utils.sh"
+
+usage() {
+  cat <<'EOF_USAGE'
+Usage:
+  airlock [--profile NAME | --config PATH] up
+  airlock [--profile NAME | --config PATH] run -- COMMAND [ARGS...]
+  airlock [--profile NAME | --config PATH] down
+  airlock [--profile NAME | --config PATH] status
+
+Options:
+  --profile NAME   Load NAME.conf from $XDG_CONFIG_HOME/airlock or /etc/airlock
+  --config PATH    Load an explicit config file
+  -h, --help       Show this help
+EOF_USAGE
+}
+
+airlock_cli_usage() {
+  usage
+}
+
+#load_selected_config() {
+#  local explicit_config=''
+#  local profile=''
+#
+#  while (($# > 0)); do
+#    case "$1" in
+#      --config)
+#        (($# >= 2)) || airlock_die '--config requires a path'
+#        explicit_config="$2"
+#        shift 2
+#        ;;
+#      --profile)
+#        (($# >= 2)) || airlock_die '--profile requires a name'
+#        profile="$2"
+#        shift 2
+#        ;;
+#      -h|--help)
+#        usage
+#        exit 0
+#        ;;
+#      *)
+#        break
+#        ;;
+#    esac
+#  done
+#
+#  if [[ -n "$explicit_config" && -n "$profile" ]]; then
+#    airlock_die 'Use either --config or --profile, not both'
+#  fi
+#
+#  if [[ -n "$explicit_config" ]]; then
+#    AIRLOCK_CONFIG="$explicit_config"
+#  elif [[ -n "$profile" ]]; then
+#    AIRLOCK_CONFIG="$(airlock_config_path_for_profile "$profile")" || \
+#      airlock_die "Profile not found: $profile"
+#  else
+#    airlock_die 'You must provide --profile or --config'
+#  fi
+#
+#  export AIRLOCK_CONFIG
+#  airlock_load_config_file
+#
+#  REMAINING_ARGS=("$@")
+#}
+
+cmd_up() {
+  local vpnc_script payload
+  local -a openconnect_cmd
+
+  airlock_require_cmd openconnect ip nsenter sudo unshare getent bash
+
+  if airlock_openconnect_running; then
+    airlock_log "Airlock is already up for profile '${AIRLOCK_CONFIG_NAME}' (PID $(airlock_openconnect_pid))"
+    return 0
+  fi
+
+  airlock_cleanup_stale_state
+  airlock_ns_setup_base_network
+  airlock_fw_apply
+  airlock_mountns_start
+  airlock_mountns_all_pids
+
+  vpnc_script="$(airlock_find_vpnc_script)" || {
+    airlock_teardown_stack
+    airlock_die 'Could not find vpnc-script; set OPENCONNECT_VPNC_SCRIPT in config'
+  }
+
+  mapfile -d '' -t openconnect_cmd < <(airlock_build_openconnect_cmd "$vpnc_script")
+
+  payload="$(airlock_auth_payload)"  # must prompt via /dev/tty
+
+  airlock_log "Starting OpenConnect with command: ${openconnect_cmd[*]}"
+
+  #if airlock_nsenter "${openconnect_cmd[@]}" <<<"$payload"; then
+  if airlock_nsenter "${openconnect_cmd[@]}" >${AIRLOCK_OPENCONNECT_LOG} 2>&1 <<<"$payload"; then
+    airlock_log "OpenConnect started successfully"
+    grep -E "^(CSTP connected|Established DTLS connection|Configured as |Session authentication will expire)" \
+      "$AIRLOCK_OPENCONNECT_LOG" || true
+  else
+    airlock_warn "OpenConnect: failed"
+    airlock_warn "Last 25 lines:"
+    tail -n 25 "$AIRLOCK_OPENCONNECT_LOG" || true
+    airlock_teardown_stack
+    airlock_die 'Failed to start OpenConnect'
+  fi
+  #if ! airlock_auth_payload | airlock_nsenter "${openconnect_cmd[@]}"; then
+  ##if ! airlock_auth_payload; then
+  #  airlock_teardown_stack
+  #  airlock_die 'Failed to start OpenConnect'
+  #fi
+
+  if ! airlock_openconnect_running; then
+    airlock_teardown_stack
+    airlock_die 'OpenConnect exited unexpectedly during startup'
+  fi
+
+  airlock_log "Airlock is up for profile '${AIRLOCK_CONFIG_NAME}'"
+}
+
+cmd_run() {
+  local user
+
+  (($# > 0)) || airlock_die 'run requires a command'
+  if [[ "$1" == '--' ]]; then
+    shift
+  fi
+  (($# > 0)) || airlock_die 'run requires a command after --'
+
+  airlock_openconnect_running || airlock_die 'Airlock is not up; run airlock ... up first'
+  airlock_mountns_running || airlock_die 'Mount namespace helper is not running; run airlock ... up first'
+  airlock_ns_exists || airlock_die "Namespace '${AIRLOCK_NAMESPACE}' does not exist; run airlock ... up first"
+
+  user="$(airlock_orig_user)"
+  airlock_log "Running command in Airlock namespace as user '$user': $*"
+  airlock_nsenter_as_user "$user" "$@"
+  return $?
+}
+
+cmd_status() {
+  local status='down'
+  if airlock_openconnect_running && airlock_mountns_running && airlock_ns_exists; then
+    status='up'
+  fi
+
+  printf 'profile=%s\n' "$AIRLOCK_CONFIG_NAME"
+  printf 'namespace=%s\n' "$AIRLOCK_NAMESPACE"
+  printf 'status=%s\n' "$status"
+
+  if [[ "$status" == 'up' ]]; then
+    printf 'openconnect_pid=%s\n' "$(airlock_openconnect_pid)"
+    printf 'mountns_pid=%s\n' "$(airlock_mountns_pid)"
+  fi
+}
+
+cmd_down() {
+  airlock_teardown_stack
+  airlock_log "Airlock is down for profile '${AIRLOCK_CONFIG_NAME}'"
+}
+
+main() {
+  local subcommand
+  declare -ag REMAINING_ARGS=()
+
+  #load_selected_config "$@"
+  #(($# > 0)) || true
+  #set -- "${REMAINING_ARGS[@]}"
+  airlock_cli_select_config "$@"
+  set -- "${AIRLOCK_CLI_REMAINING_ARGS[@]}"
+  (($# > 0)) || airlock_die 'Missing subcommand'
+
+  subcommand="$1"
+  shift
+
+  case "$subcommand" in
+    up) cmd_up "$@" ;;
+    run) cmd_run "$@" ;;
+    down) cmd_down "$@" ;;
+    status) cmd_status "$@" ;;
+    -h|--help|help)
+      usage
+      ;;
+    *)
+      airlock_die "Unknown subcommand: $subcommand"
+      ;;
+  esac
+}
+
+main "$@"

@@ -1,0 +1,378 @@
+#!/usr/bin/env bash
+# shellcheck shell=bash
+set -euo pipefail
+
+AIRLOCK_BIN_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+AIRLOCK_LIBEXEC_DIR="${AIRLOCK_LIBEXEC_DIR:-$(cd -- "${AIRLOCK_BIN_DIR}/../libexec" && pwd -P)}"
+AIRLOCK_BIN="${AIRLOCK_BIN_DIR}/airlock"
+export AIRLOCK_LIBEXEC_DIR
+
+# shellcheck source=/dev/null
+source "${AIRLOCK_LIBEXEC_DIR}/airlock/refuse_root.sh"
+airlock_refuse_root
+
+# shellcheck source=/dev/null
+source "${AIRLOCK_LIBEXEC_DIR}/airlock/common.sh"
+
+# shellcheck source=/dev/null
+source "${AIRLOCK_LIBEXEC_DIR}/airlock/cli-utils.sh"
+
+: "${AIRLOCK_FIREFOX_USE_SEPARATE_PROFILE:=true}"
+: "${AIRLOCK_FIREFOX_PROFILE_DIR:=}"
+
+# Internal flags
+AIRLOCK_FIREFOX_TEMP_PROFILE='false'
+AIRLOCK_FIREFOX_CLEAN_PROFILE='false'
+
+usage() {
+  cat <<'EOF'
+Usage:
+  airlock-firefox (--profile NAME | --config PATH) [options] [--] [URL ...] [FIREFOX_ARGS...]
+
+Options:
+  --separate-profile        Use a dedicated Firefox profile (default)
+  --no-separate-profile     Reuse Firefox's default profile
+  --profile-dir DIR         Explicit profile directory (only used with --separate-profile)
+  --temp-profile            Create a temporary profile dir and delete it after Firefox exits
+  --clean-profile           Delete the configured profile dir and exit (refuses if profile appears in use)
+  -h, --help                Show this help
+
+Notes:
+  - If you want to pass Firefox flags starting with '-', put them after '--'.
+EOF
+}
+
+airlock_cli_usage() { usage; }
+
+# Expand a leading "~" in a path (bash-only, no external deps)
+_expand_tilde() {
+  local p="$1"
+  if [[ "$p" == "~" ]]; then
+    printf '%s\n' "$HOME"
+  elif [[ "$p" == "~/"* ]]; then
+    printf '%s\n' "${HOME}${p:1}"
+  else
+    printf '%s\n' "$p"
+  fi
+}
+
+#_select_config() {
+#  local explicit_config='' profile=''
+#
+#  while (($# > 0)); do
+#    case "$1" in
+#      --config)
+#        (($# >= 2)) || airlock_die '--config requires a path'
+#        explicit_config="$2"; shift 2 ;;
+#      --profile)
+#        (($# >= 2)) || airlock_die '--profile requires a name'
+#        profile="$2"; shift 2 ;;
+#      -h|--help)
+#        usage; exit 0 ;;
+#      *)
+#        break ;;
+#    esac
+#  done
+#
+#  if [[ -n "$explicit_config" && -n "$profile" ]]; then
+#    airlock_die 'Use either --config or --profile, not both'
+#  fi
+#
+#  if [[ -n "$explicit_config" ]]; then
+#    AIRLOCK_CONFIG="$explicit_config"
+#  elif [[ -n "$profile" ]]; then
+#    AIRLOCK_CONFIG="$(airlock_config_path_for_profile "$profile")" || airlock_die "Profile not found: $profile"
+#  else
+#    airlock_die 'You must provide --profile or --config'
+#  fi
+#
+#  export AIRLOCK_CONFIG
+#  airlock_load_config_file
+#}
+
+_firefox_default_profile_dir() {
+  printf '%s\n' "${XDG_DATA_HOME:-$HOME/.local/share}/airlock/firefox-${AIRLOCK_CONFIG_NAME}"
+}
+
+_firefox_apply_defaults() {
+  if [[ "$AIRLOCK_FIREFOX_USE_SEPARATE_PROFILE" == 'true' && -z "$AIRLOCK_FIREFOX_PROFILE_DIR" ]]; then
+    AIRLOCK_FIREFOX_PROFILE_DIR="$(_firefox_default_profile_dir)"
+  fi
+  if [[ -n "$AIRLOCK_FIREFOX_PROFILE_DIR" ]]; then
+    AIRLOCK_FIREFOX_PROFILE_DIR="$(_expand_tilde "$AIRLOCK_FIREFOX_PROFILE_DIR")"
+  fi
+  airlock_log "Using Firefox profile directory: $AIRLOCK_FIREFOX_PROFILE_DIR"
+}
+
+#_firefox_ensure_profile_dir() {
+#  [[ -n "$AIRLOCK_FIREFOX_PROFILE_DIR" ]] || airlock_die "Profile dir is empty"
+#  install -d -m 700 -- "$AIRLOCK_FIREFOX_PROFILE_DIR"
+#}
+#
+#
+#_apply_defaults() {
+#  if [[ "$AIRLOCK_FIREFOX_USE_SEPARATE_PROFILE" == 'true' && -z "$AIRLOCK_FIREFOX_PROFILE_DIR" ]]; then
+#    AIRLOCK_FIREFOX_PROFILE_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/airlock/firefox-${AIRLOCK_CONFIG_NAME}"
+#  fi
+#  AIRLOCK_FIREFOX_PROFILE_DIR="$(_expand_tilde "$AIRLOCK_FIREFOX_PROFILE_DIR")"
+#  airlock_log "Using Firefox profile directory: $AIRLOCK_FIREFOX_PROFILE_DIR"
+#}
+
+_firefox_user_home() {
+  local user="${1:?user required}"
+  getent passwd "$user" | awk -F: '{print $6}'
+}
+
+_ensure_profile_dir() {
+  local user group home
+  user="$(airlock_orig_user)"
+  group="$(id -gn "$user")"
+  home="$(_firefox_user_home "$user")"
+  [[ -n "$home" ]] || airlock_die "Could not determine home directory for user: $user"
+
+  airlock_as_root install -d -m 700 -o "$user" -g "$group" "$AIRLOCK_FIREFOX_PROFILE_DIR"
+  airlock_log "Ensured Firefox profile directory exists with correct ownership and permissions: $AIRLOCK_FIREFOX_PROFILE_DIR"
+}
+
+_firefox_write_userjs() {
+  local user group tmp
+  user="$(airlock_orig_user)"
+  group="$(id -gn "$user")"
+
+  _ensure_profile_dir
+
+  tmp="$(mktemp)"
+  cleanup_tmp() { rm -f -- "$tmp"; }
+  trap cleanup_tmp RETURN
+
+  cat >"$tmp" <<'EOF_JS'
+user_pref("browser.privatebrowsing.autostart", true);
+user_pref("browser.sessionstore.resume_from_crash", false);
+
+user_pref("network.dns.disablePrefetch", true);
+user_pref("network.predictor.enabled", false);
+user_pref("network.http.speculative-parallel-limit", 0);
+EOF_JS
+
+  airlock_as_root install -m 600 -o "$user" -g "$group" "$tmp" "${AIRLOCK_FIREFOX_PROFILE_DIR}/user.js"
+  airlock_log "Written Firefox user.js preferences for private browsing and privacy hardening"
+}
+
+_firefox_profile_in_use() {
+  # Best-effort: check running firefox processes and common lock files.
+  local dir="${1:?dir required}"
+
+  if command -v pgrep >/dev/null 2>&1; then
+    if pgrep -af firefox 2>/dev/null | grep -F -- "$dir" >/dev/null 2>&1; then
+      return 0
+    fi
+  else
+    if ps -eo pid,args | grep -F firefox | grep -F -- "$dir" | grep -v grep >/dev/null 2>&1; then
+      return 0
+    fi
+  fi
+
+  # Lock files can be stale after crashes; treat them as a warning, not a hard block.
+  if [[ -e "$dir/parent.lock" || -e "$dir/.parentlock" || -e "$dir/lock" ]]; then
+    airlock_warn "Profile lock file exists in '$dir' (may be stale)."
+  fi
+
+  return 1
+}
+
+_firefox_clean_profile_dir() {
+  local dir="${1:?dir required}"
+
+  if [[ ! -d "$dir" ]]; then
+    airlock_log "No profile dir to clean: $dir"
+    return 0
+  fi
+
+  if _firefox_profile_in_use "$dir"; then
+    airlock_die "Refusing to delete profile dir '$dir' because a Firefox process appears to be using it."
+  fi
+
+  airlock_warn "Deleting Firefox profile dir: $dir"
+  rm -rf -- "$dir"
+}
+
+_firefox_build_cmd() {
+  local -a cmd=(firefox)
+
+  if [[ "$AIRLOCK_FIREFOX_USE_SEPARATE_PROFILE" == 'true' ]]; then
+    cmd+=(-no-remote -profile "$AIRLOCK_FIREFOX_PROFILE_DIR")
+  fi
+
+  cmd+=(-private-window)
+
+  if (($# == 0)); then
+    cmd+=(about:privatebrowsing)
+  else
+    cmd+=("$@")
+  fi
+
+  printf '%s\0' "${cmd[@]}"
+}
+
+main() {
+  airlock_require_cmd firefox install mktemp rm
+
+  # Parse --profile/--config (and -h/--help) using shared util
+  airlock_cli_select_config "$@"
+  set -- "${AIRLOCK_CLI_REMAINING_ARGS[@]}"
+
+  # Parse firefox-wrapper options
+  local -a targets=()
+  while (($# > 0)); do
+    case "$1" in
+      --separate-profile)
+        AIRLOCK_FIREFOX_USE_SEPARATE_PROFILE='true'
+        shift
+        ;;
+      --no-separate-profile)
+        AIRLOCK_FIREFOX_USE_SEPARATE_PROFILE='false'
+        shift
+        ;;
+      --profile-dir)
+        (($# >= 2)) || airlock_die '--profile-dir requires a path'
+        AIRLOCK_FIREFOX_PROFILE_DIR="$2"
+        shift 2
+        ;;
+      --temp-profile)
+        AIRLOCK_FIREFOX_TEMP_PROFILE='true'
+        AIRLOCK_FIREFOX_USE_SEPARATE_PROFILE='true'
+        shift
+        ;;
+      --clean-profile)
+        AIRLOCK_FIREFOX_CLEAN_PROFILE='true'
+        AIRLOCK_FIREFOX_USE_SEPARATE_PROFILE='true'
+        shift
+        ;;
+      -h|--help)
+        airlock_cli_usage
+        exit 0
+        ;;
+      --)
+        shift
+        targets+=("$@")
+        break
+        ;;
+      *)
+        targets+=("$1")
+        shift
+        ;;
+    esac
+  done
+
+  _firefox_apply_defaults
+
+  # Clean-only mode
+  if [[ "$AIRLOCK_FIREFOX_CLEAN_PROFILE" == 'true' ]]; then
+    if [[ "$AIRLOCK_FIREFOX_USE_SEPARATE_PROFILE" != 'true' ]]; then
+      airlock_die "--clean-profile requires --separate-profile"
+    fi
+    _firefox_clean_profile_dir "$AIRLOCK_FIREFOX_PROFILE_DIR"
+    airlock_log "Done."
+    exit 0
+  fi
+
+  # Temp profile mode: create a fresh dir, run Firefox, delete afterwards
+  local temp_dir=''
+  if [[ "$AIRLOCK_FIREFOX_TEMP_PROFILE" == 'true' ]]; then
+    temp_dir="$(mktemp -d "${XDG_RUNTIME_DIR:-/tmp}/airlock-firefox.${AIRLOCK_CONFIG_NAME}.XXXXXX")"
+    chmod 700 "$temp_dir" 2>/dev/null || true
+    AIRLOCK_FIREFOX_PROFILE_DIR="$temp_dir"
+    airlock_log "Created temporary Firefox profile directory: $AIRLOCK_FIREFOX_PROFILE_DIR"
+  fi
+
+  if [[ "$AIRLOCK_FIREFOX_USE_SEPARATE_PROFILE" == 'true' ]]; then
+    _firefox_write_userjs
+  fi
+
+  airlock_log "Ensuring Airlock is up for profile '${AIRLOCK_CONFIG_NAME}'..."
+  "$AIRLOCK_BIN" --config "$AIRLOCK_CONFIG" up
+
+  local -a firefox_cmd=()
+  mapfile -d '' -t firefox_cmd < <(_firefox_build_cmd "${targets[@]}")
+
+  airlock_log "Launching Firefox via Airlock (profile='${AIRLOCK_CONFIG_NAME}', separate_profile=${AIRLOCK_FIREFOX_USE_SEPARATE_PROFILE}, temp_profile=${AIRLOCK_FIREFOX_TEMP_PROFILE})"
+
+  if [[ "$AIRLOCK_FIREFOX_TEMP_PROFILE" == 'true' ]]; then
+    # No exec: we want to clean up after it exits
+    set +e
+    "$AIRLOCK_BIN" --config "$AIRLOCK_CONFIG" run -- "${firefox_cmd[@]}"
+    rc=$?
+    set -e
+
+    airlock_warn "Cleaning temporary Firefox profile dir: $temp_dir"
+    rm -rf -- "$temp_dir" || airlock_warn "Failed to remove temp profile dir: $temp_dir"
+    exit "$rc"
+  fi
+
+  # Persistent profile: exec is fine
+  exec "$AIRLOCK_BIN" --config "$AIRLOCK_CONFIG" run -- "${firefox_cmd[@]}"
+}
+
+#main() {
+#  airlock_require_cmd firefox getent install mktemp rm
+#
+#  # Parse config/profile (so we know AIRLOCK_CONFIG_NAME for defaults)
+#  airlock_cli_select_config "$@"
+#  set -- "${AIRLOCK_CLI_REMAINING_ARGS[@]}"
+#
+#  # Parse wrapper options and collect remaining args to pass to Firefox
+#  local -a firefox_targets=()
+#  shift $((0)) # no-op, keep shellcheck calm
+#
+#  # Re-parse args again, but this time for firefox wrapper options (keep it simple)
+#  # We ignore --config/--profile here because _select_config already consumed them by re-reading $@ earlier.
+#  while (($# > 0)); do
+#    case "$1" in
+#      --config|--profile)
+#        # consume + ignore (already handled); keep compatibility if users repeat them
+#        shift; (($# > 0)) && shift || true ;;
+#      --separate-profile)
+#        AIRLOCK_FIREFOX_USE_SEPARATE_PROFILE='true'; shift ;;
+#      --no-separate-profile)
+#        AIRLOCK_FIREFOX_USE_SEPARATE_PROFILE='false'; shift ;;
+#      --profile-dir)
+#        (($# >= 2)) || airlock_die '--profile-dir requires a path'
+#        AIRLOCK_FIREFOX_PROFILE_DIR="$2"; shift 2 ;;
+#      -h|--help)
+#        usage; exit 0 ;;
+#      --)
+#        shift
+#        firefox_targets+=("$@")
+#        break ;;
+#      *)
+#        firefox_targets+=("$1"); shift ;;
+#    esac
+#  done
+#
+#  _apply_defaults
+#
+#  if [[ "$AIRLOCK_FIREFOX_USE_SEPARATE_PROFILE" == 'true' ]]; then
+#    _write_userjs
+#  fi
+#
+#  # 3) Build Firefox command argv
+#  local -a firefox_cmd=(firefox)
+#
+#  if [[ "$AIRLOCK_FIREFOX_USE_SEPARATE_PROFILE" == 'true' ]]; then
+#    firefox_cmd+=(-no-remote -profile "$AIRLOCK_FIREFOX_PROFILE_DIR")
+#  fi
+#
+#  firefox_cmd+=(-private-window)
+#
+#  if ((${#firefox_targets[@]} == 0)); then
+#    firefox_cmd+=(about:privatebrowsing)
+#  else
+#    firefox_cmd+=("${firefox_targets[@]}")
+#  fi
+#
+#  airlock_log "Launching Firefox via Airlock (profile='${AIRLOCK_CONFIG_NAME}', separate_profile=${AIRLOCK_FIREFOX_USE_SEPARATE_PROFILE})"
+#  airlock_log "Final Firefox command: ${firefox_cmd[*]}"
+#  exec "$AIRLOCK_BIN" --config "$AIRLOCK_CONFIG" run -- "${firefox_cmd[@]}"
+#}
+
+main "$@"
