@@ -7,51 +7,6 @@ if [[ -n "${AIRLOCK_CLI_UTILS_SH_LOADED:-}" ]]; then
 fi
 readonly AIRLOCK_CLI_UTILS_SH_LOADED=1
 
-#airlock_cli_select_config() {
-#  local explicit_config='' profile=''
-#  declare -ag AIRLOCK_CLI_REMAINING_ARGS=()
-#
-#  while (($# > 0)); do
-#    case "$1" in
-#      --config)
-#        (($# >= 2)) || airlock_die '--config requires a path'
-#        explicit_config="$2"
-#        shift 2
-#        ;;
-#      --profile)
-#        (($# >= 2)) || airlock_die '--profile requires a name'
-#        profile="$2"
-#        shift 2
-#        ;;
-#      -h|--help)
-#        if declare -F airlock_cli_usage >/dev/null 2>&1; then
-#          airlock_cli_usage
-#          exit 0
-#        fi
-#        airlock_die "Help requested but airlock_cli_usage() is not defined in this script"
-#        ;;
-#      *)
-#        AIRLOCK_CLI_REMAINING_ARGS=("$@")
-#        break
-#        ;;
-#    esac
-#  done
-#
-#  if [[ -n "$explicit_config" && -n "$profile" ]]; then
-#    airlock_die 'Use either --config or --profile, not both'
-#  fi
-#
-#  if [[ -n "$explicit_config" ]]; then
-#    AIRLOCK_CONFIG="$explicit_config"
-#  elif [[ -n "$profile" ]]; then
-#    AIRLOCK_CONFIG="$(airlock_config_path_for_profile "$profile")" || airlock_die "Profile not found: $profile"
-#  else
-#    airlock_die 'You must provide --profile or --config'
-#  fi
-#
-#  export AIRLOCK_CONFIG
-#  airlock_load_config_file
-#}
 airlock_cli_select_config() {
   local explicit_config='' profile=''
   local default_profile="${AIRLOCK_DEFAULT_PROFILE:-default}"

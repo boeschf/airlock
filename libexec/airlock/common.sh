@@ -25,7 +25,6 @@ fi
 : "${AIRLOCK_NS_IP_CIDR:=10.200.200.2/24}"
 : "${AIRLOCK_VETH_HOST:=alh0}"
 : "${AIRLOCK_VETH_NS:=aln0}"
-#: "${AIRLOCK_AUTH_FUNCTION:=airlock_auth_payload}"
 : "${AIRLOCK_CONFIG_NAME:=default}"
 if [[ -n "${_airlock_common_dir:-}" ]]; then
   : "${AIRLOCK_LIBEXEC_DIR:=$(cd -- "${_airlock_common_dir}/.." && pwd -P)}"
@@ -172,11 +171,6 @@ airlock_orig_user() {
   fi
 }
 
-#airlock_user_home() {
-#  local user="${1:?user required}"
-#  getent passwd "$user" | awk -F: '{print $6}'
-#}
-
 airlock_validate_ifname() {
   local ifname="${1:?ifname required}"
   [[ ${#ifname} -le 15 ]] || airlock_die "Interface name too long: $ifname"
@@ -302,13 +296,6 @@ airlock_build_openconnect_cmd() {
   printf '%s\0' "${cmd[@]}"
 }
 
-#airlock_openconnect_pid() {
-#  local pid
-#  [[ -r "$AIRLOCK_PIDFILE" ]] || return 1
-#  pid="$(<"$AIRLOCK_PIDFILE")"
-#  [[ "$pid" =~ ^[0-9]+$ ]] || return 1
-#  printf '%s\n' "$pid"
-#}
 airlock_openconnect_pid() {
   local pid
 
@@ -321,32 +308,12 @@ airlock_openconnect_pid() {
   printf '%s\n' "$pid"
 }
 
-#airlock_openconnect_running() {
-#  local pid
-#  pid="$(airlock_openconnect_pid)" || return 1
-#  kill -0 "$pid" 2>/dev/null
-#}
 airlock_openconnect_running() {
   local pid
   pid="$(airlock_openconnect_pid)" || return 1
   airlock_as_root sh -c 'kill -0 "$1" 2>/dev/null' _ "$pid"
 }
 
-#airlock_mountns_pid() {
-#  local pid
-#  if airlock_root_isfile "$AIRLOCK_MOUNTNS_PIDFILE"; then
-#    pid="$(airlock_root_cat "$AIRLOCK_MOUNTNS_PIDFILE" 2>/dev/null || true)"
-#    if [[ "$pid" =~ ^[0-9]+$ ]]; then
-#      printf '%s\n' "$pid"
-#      return 0
-#    fi
-#  fi
-#  return 1
-##  [[ -r "$AIRLOCK_MOUNTNS_PIDFILE" ]] || return 1
-##  pid="$(<"$AIRLOCK_MOUNTNS_PIDFILE")"
-##  [[ "$pid" =~ ^[0-9]+$ ]] || return 1
-##  printf '%s\n' "$pid"
-#}
 airlock_mountns_pid() {
   local pid
 
@@ -370,12 +337,6 @@ airlock_mountns_all_pids() {
   airlock_log "Found processes in namespace $AIRLOCK_NAMESPACE: ${pids[*]}"
 }
 
-#airlock_mountns_running() {
-#  local pid
-#  pid="$(airlock_mountns_pid)" || return 1
-#  # kill -0 is used to check if the process is running without sending a signal
-#  kill -0 "$pid" 2>/dev/null
-#}
 airlock_mountns_running() {
   local pid
   pid="$(airlock_mountns_pid)" || return 1
@@ -413,7 +374,6 @@ airlock_prepare_overlay_dirs() {
   airlock_as_root install -d -m 700 "$AIRLOCK_ETC_UPPER_DIR" "$AIRLOCK_ETC_WORK_DIR"
 }
 
-
 airlock_wan_if() {
   local dev
   dev="$(ip -o route get 1.1.1.1 2>/dev/null | awk '{for (i=1; i<=NF; i++) if ($i=="dev") { print $(i+1); exit }}')"
@@ -430,19 +390,11 @@ airlock_snapshot_sysctl() {
 airlock_restore_sysctl() {
   local prev
   airlock_log "Restoring sysctl value for net.ipv4.ip_forward from snapshot if it exists at: $AIRLOCK_SYSCTL_SNAPSHOT"
-  #does it exist
   airlock_log "Checking if sysctl snapshot file exists and is readable at: $AIRLOCK_SYSCTL_SNAPSHOT"
   # needs to run as root
-  #[[ -r "$AIRLOCK_SYSCTL_SNAPSHOT" ]] || return 0
-  #if airlock_as_root test -f "$AIRLOCK_SYSCTL_SNAPSHOT"; then
-  #if airlock_root_test -f "$AIRLOCK_SYSCTL_SNAPSHOT"; then
   if airlock_root_isfile "$AIRLOCK_SYSCTL_SNAPSHOT"; then
     airlock_log "Snapshot file exists, reading previous value for net.ipv4.ip_forward"
-    #prev="$(airlock_as_root cat -- "$AIRLOCK_SYSCTL_SNAPSHOT")"
     prev="$(airlock_root_cat "$AIRLOCK_SYSCTL_SNAPSHOT")"
-    #airlock_as_root sysctl -w "net.ipv4.ip_forward=$prev" >/dev/null
-    #airlock_as_root rm -f -- "$AIRLOCK_SYSCTL_SNAPSHOT"
-    #prev="$(<"$AIRLOCK_SYSCTL_SNAPSHOT")"
     airlock_log "Restoring sysctl value for net.ipv4.ip_forward from snapshot: $prev"
     if [[ "$prev" =~ ^[01]$ ]]; then
       airlock_log "Setting net.ipv4.ip_forward back to $prev"
@@ -522,44 +474,6 @@ EOF_NFT
   esac
 }
 
-#airlock_fw_remove() {
-#  local backend wan
-#  airlock_log "Removing firewall rules and restoring sysctl settings if $AIRLOCK_FW_BACKEND_FILE exists"
-#  # again needs to run as root to read the backend file if it exists
-#  #if ! airlock_root_test -f "$AIRLOCK_FW_BACKEND_FILE"; then
-#  if ! airlock_root_isfile "$AIRLOCK_FW_BACKEND_FILE"; then
-#    airlock_restore_sysctl
-#    return 0
-#  fi
-#  #[[ -r "$AIRLOCK_FW_BACKEND_FILE" ]] || {
-#  #  airlock_restore_sysctl
-#  #  return 0
-#  #}
-#
-#  #backend="$(<"$AIRLOCK_FW_BACKEND_FILE")"
-#  #backend="$(airlock_as_root sh -c 'cat "$1"' _ "$AIRLOCK_FW_BACKEND_FILE")"
-#  backend="$(airlock_root_cat "$AIRLOCK_FW_BACKEND_FILE")"
-#  echo "Removing firewall rules for backend: $backend"
-#  wan=''
-#  [[ -r "$AIRLOCK_WAN_IF_FILE" ]] && wan="$(<"$AIRLOCK_WAN_IF_FILE")"
-#
-#  case "$backend" in
-#    nft)
-#      airlock_log "Deleting nftables table: $AIRLOCK_NFT_TABLE"
-#      airlock_as_root nft delete table ip "$AIRLOCK_NFT_TABLE" 2>/dev/null || true
-#      ;;
-#    iptables)
-#      if [[ -n "$wan" ]]; then
-#        airlock_as_root iptables -D FORWARD -i "$AIRLOCK_VETH_HOST" -o "$wan" -j ACCEPT 2>/dev/null || true
-#        airlock_as_root iptables -D FORWARD -i "$wan" -o "$AIRLOCK_VETH_HOST" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || true
-#        airlock_as_root iptables -t nat -D POSTROUTING -s "$AIRLOCK_SUBNET_CIDR" -o "$wan" -j MASQUERADE 2>/dev/null || true
-#      fi
-#      ;;
-#  esac
-#
-#  airlock_as_root rm -f -- "$AIRLOCK_WAN_IF_FILE" "$AIRLOCK_FW_BACKEND_FILE"
-#  airlock_restore_sysctl
-#}
 airlock_fw_remove() {
   local backend wan
 
@@ -693,14 +607,7 @@ airlock_mountns_start() {
   [[ -x "$helper" ]] || airlock_die "Mount namespace helper not found: $helper"
 
   airlock_prepare_overlay_dirs
-  #airlock_as_root rm -f -- "$AIRLOCK_MOUNTNS_PIDFILE"
 
-  #airlock_as_root env \
-  #  AIRLOCK_CONFIG="$AIRLOCK_CONFIG" \
-  #  AIRLOCK_LIBEXEC_DIR="$AIRLOCK_LIBEXEC_DIR" \
-  #  ip netns exec "$AIRLOCK_NAMESPACE" \
-  #  unshare --mount --propagation private --fork \
-  #  "$helper" >/dev/null 2>&1 &
   # Start helper inside:
   #   - the network namespace ($AIRLOCK_NAMESPACE)
   #   - a fresh mount namespace (unshare --mount)
@@ -738,86 +645,6 @@ airlock_mountns_start() {
 
   airlock_die 'Failed to start persistent mount namespace helper'
 }
-#airlock_mountns_start() {
-#  local helper logfile i
-#  helper="${AIRLOCK_LIBEXEC_DIR}/airlock/mountns-helper.sh"
-#  logfile="${AIRLOCK_RUNTIME_DIR}/mountns.log"
-#
-#  [[ -x "$helper" ]] || airlock_die "mountns helper not found/executable: $helper"
-#
-#  # Prepare overlay dirs and runtime dirs (root-owned)
-#  airlock_prepare_overlay_dirs
-#
-#  # Remove stale pidfile (root-only dir)
-#  airlock_as_root rm -f "$AIRLOCK_MOUNTNS_PIDFILE" 2>/dev/null || true
-#
-#  # Start helper inside:
-#  #   - the network namespace ($AIRLOCK_NAMESPACE)
-#  #   - a fresh mount namespace (unshare --mount)
-#  # and log stdout/stderr to $logfile (created as root)
-#  airlock_as_root sh -c '
-#    set -euo pipefail
-#
-#    logfile="$1"
-#    pidfile="$2"
-#    ns="$3"
-#    helper="$4"
-#    shift 4
-#
-#    # $@ now contains ENV assignments like KEY=VALUE
-#
-#    # Ensure log file exists and is writable by root, and clear it
-#    : >"$logfile"
-#    chmod 600 "$logfile"
-#
-#    # Make sure we start fresh
-#    rm -f "$pidfile"
-#
-#    # Run helper in the background, with logging handled in this root shell
-#    env "$@" \
-#      ip netns exec "$ns" \
-#      unshare --mount --propagation private --fork \
-#      "$helper" >>"$logfile" 2>&1 &
-#  ' _ \
-#    "$logfile" \
-#    "$AIRLOCK_MOUNTNS_PIDFILE" \
-#    "$AIRLOCK_NAMESPACE" \
-#    "$helper" \
-#    "AIRLOCK_CONFIG=$AIRLOCK_CONFIG" \
-#    "AIRLOCK_LIBEXEC_DIR=$AIRLOCK_LIBEXEC_DIR"
-#
-#  # Wait for helper to write pidfile and be considered running
-#  for ((i = 0; i < 100; i++)); do
-#    if airlock_mountns_running; then
-#      return 0
-#    fi
-#    sleep 0.1
-#  done
-#
-#  airlock_die "Failed to start persistent mount namespace helper. See log: sudo tail -200 '$logfile'"
-#}
-
-#airlock_mountns_stop() {
-#  local pid=""
-#
-#  if airlock_root_isfile "$AIRLOCK_MOUNTNS_PIDFILE"; then
-#    pid="$(airlock_root_cat "$AIRLOCK_MOUNTNS_PIDFILE" 2>/dev/null || true)"
-#  fi
-#
-#  if [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null; then
-#    # Give it a chance to exit and run its trap (removes pidfile)
-#    kill "$pid" 2>/dev/null || true
-#    for _ in {1..30}; do
-#      kill -0 "$pid" 2>/dev/null || break
-#      sleep 0.1
-#    done
-#    # Last resort
-#    kill -KILL "$pid" 2>/dev/null || true
-#  fi
-#
-#  # Always remove pidfile (even if SIGKILL or stale)
-#  airlock_as_root rm -f "$AIRLOCK_MOUNTNS_PIDFILE" 2>/dev/null || true
-#}
 airlock_mountns_stop() {
   local pid=""
 
@@ -845,16 +672,6 @@ airlock_nsenter() {
   airlock_as_root nsenter --target "$pid" --mount --net -- "$@"
 }
 
-#airlock_nsenter_as_user() {
-#  local user="${1:?user required}"
-#  shift
-#
-#  local helper="${AIRLOCK_LIBEXEC_DIR}/airlock/exec-with-env0.sh"
-#  [[ -x "$helper" ]] || airlock_die "Missing helper: $helper"
-#
-#  # No temp file. No env values on argv. Stdin carries env snapshot.
-#  airlock_nsenter sudo -H -u "$user" -- "$helper" "$@" < <(env -0)
-#}
 airlock_nsenter_as_user() {
   local user="${1:?user required}"
   shift
@@ -887,26 +704,6 @@ airlock_nsenter_as_user() {
   airlock_die "Need setpriv or runuser to drop privileges without sudo"
 }
 
-
-#airlock_stop_openconnect() {
-#  local pid i
-#  if ! airlock_openconnect_running; then
-#    echo "No running openconnect process found - cleaning up stale PID file if it exists: $AIRLOCK_PIDFILE"
-#    airlock_as_root rm -f -- "$AIRLOCK_PIDFILE"
-#    return 0
-#  fi
-#  pid="$(airlock_openconnect_pid)"
-#  kill "$pid" 2>/dev/null || true
-#  for ((i = 0; i < 50; i++)); do
-#    if ! kill -0 "$pid" 2>/dev/null; then
-#      airlock_as_root rm -f -- "$AIRLOCK_PIDFILE"
-#      return 0
-#    fi
-#    sleep 0.1
-#  done
-#  kill -KILL "$pid" 2>/dev/null || true
-#  airlock_as_root rm -f -- "$AIRLOCK_PIDFILE"
-#}
 airlock_stop_openconnect() {
   local pid i
 
@@ -950,18 +747,6 @@ airlock_stop_openconnect() {
   airlock_log "openconnect stopped (forced if needed)"
 }
 
-#airlock_kill_ns_processes() {
-#  local pids
-#  airlock_ns_exists || return 0
-#  pids="$(airlock_as_root ip netns pids "$AIRLOCK_NAMESPACE" 2>/dev/null || true)"
-#  [[ -n "$pids" ]] || return 0
-#  airlock_log "Found processes running in namespace $AIRLOCK_NAMESPACE with PIDs: $pids - sending SIGTERM"
-#  printf '%s\n' "$pids" | xargs -r airlock_as_root kill 2>/dev/null || true
-#  sleep 0.2
-#  pids="$(airlock_as_root ip netns pids "$AIRLOCK_NAMESPACE" 2>/dev/null || true)"
-#  airlock_log "Checking for remaining processes in namespace $AIRLOCK_NAMESPACE after SIGTERM: $pids"
-#  [[ -n "$pids" ]] && printf '%s\n' "$pids" | xargs -r airlock_as_root kill -KILL 2>/dev/null || true
-#}
 airlock_kill_ns_processes() {
   local -a pids=()
 

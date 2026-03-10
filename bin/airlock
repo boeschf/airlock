@@ -35,51 +35,6 @@ airlock_cli_usage() {
   usage
 }
 
-#load_selected_config() {
-#  local explicit_config=''
-#  local profile=''
-#
-#  while (($# > 0)); do
-#    case "$1" in
-#      --config)
-#        (($# >= 2)) || airlock_die '--config requires a path'
-#        explicit_config="$2"
-#        shift 2
-#        ;;
-#      --profile)
-#        (($# >= 2)) || airlock_die '--profile requires a name'
-#        profile="$2"
-#        shift 2
-#        ;;
-#      -h|--help)
-#        usage
-#        exit 0
-#        ;;
-#      *)
-#        break
-#        ;;
-#    esac
-#  done
-#
-#  if [[ -n "$explicit_config" && -n "$profile" ]]; then
-#    airlock_die 'Use either --config or --profile, not both'
-#  fi
-#
-#  if [[ -n "$explicit_config" ]]; then
-#    AIRLOCK_CONFIG="$explicit_config"
-#  elif [[ -n "$profile" ]]; then
-#    AIRLOCK_CONFIG="$(airlock_config_path_for_profile "$profile")" || \
-#      airlock_die "Profile not found: $profile"
-#  else
-#    airlock_die 'You must provide --profile or --config'
-#  fi
-#
-#  export AIRLOCK_CONFIG
-#  airlock_load_config_file
-#
-#  REMAINING_ARGS=("$@")
-#}
-
 cmd_up() {
   local vpnc_script payload
   local -a openconnect_cmd
@@ -108,7 +63,6 @@ cmd_up() {
 
   airlock_log "Starting OpenConnect with command: ${openconnect_cmd[*]}"
 
-  #if airlock_nsenter "${openconnect_cmd[@]}" <<<"$payload"; then
   if airlock_nsenter "${openconnect_cmd[@]}" >${AIRLOCK_OPENCONNECT_LOG} 2>&1 <<<"$payload"; then
     airlock_log "OpenConnect started successfully"
     grep -E "^(CSTP connected|Established DTLS connection|Configured as |Session authentication will expire)" \
@@ -120,11 +74,6 @@ cmd_up() {
     airlock_teardown_stack
     airlock_die 'Failed to start OpenConnect'
   fi
-  #if ! airlock_auth_payload | airlock_nsenter "${openconnect_cmd[@]}"; then
-  ##if ! airlock_auth_payload; then
-  #  airlock_teardown_stack
-  #  airlock_die 'Failed to start OpenConnect'
-  #fi
 
   if ! airlock_openconnect_running; then
     airlock_teardown_stack
@@ -178,9 +127,6 @@ main() {
   local subcommand
   declare -ag REMAINING_ARGS=()
 
-  #load_selected_config "$@"
-  #(($# > 0)) || true
-  #set -- "${REMAINING_ARGS[@]}"
   airlock_cli_select_config "$@"
   set -- "${AIRLOCK_CLI_REMAINING_ARGS[@]}"
   (($# > 0)) || airlock_die 'Missing subcommand'

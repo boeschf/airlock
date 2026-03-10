@@ -45,7 +45,7 @@ EOF
 airlock_cli_usage() { usage; }
 
 # Expand a leading "~" in a path (bash-only, no external deps)
-_expand_tilde() {
+_firefox_expand_tilde() {
   local p="$1"
   if [[ "$p" == "~" ]]; then
     printf '%s\n' "$HOME"
@@ -56,40 +56,6 @@ _expand_tilde() {
   fi
 }
 
-#_select_config() {
-#  local explicit_config='' profile=''
-#
-#  while (($# > 0)); do
-#    case "$1" in
-#      --config)
-#        (($# >= 2)) || airlock_die '--config requires a path'
-#        explicit_config="$2"; shift 2 ;;
-#      --profile)
-#        (($# >= 2)) || airlock_die '--profile requires a name'
-#        profile="$2"; shift 2 ;;
-#      -h|--help)
-#        usage; exit 0 ;;
-#      *)
-#        break ;;
-#    esac
-#  done
-#
-#  if [[ -n "$explicit_config" && -n "$profile" ]]; then
-#    airlock_die 'Use either --config or --profile, not both'
-#  fi
-#
-#  if [[ -n "$explicit_config" ]]; then
-#    AIRLOCK_CONFIG="$explicit_config"
-#  elif [[ -n "$profile" ]]; then
-#    AIRLOCK_CONFIG="$(airlock_config_path_for_profile "$profile")" || airlock_die "Profile not found: $profile"
-#  else
-#    airlock_die 'You must provide --profile or --config'
-#  fi
-#
-#  export AIRLOCK_CONFIG
-#  airlock_load_config_file
-#}
-
 _firefox_default_profile_dir() {
   printf '%s\n' "${XDG_DATA_HOME:-$HOME/.local/share}/airlock/firefox-${AIRLOCK_CONFIG_NAME}"
 }
@@ -99,24 +65,10 @@ _firefox_apply_defaults() {
     AIRLOCK_FIREFOX_PROFILE_DIR="$(_firefox_default_profile_dir)"
   fi
   if [[ -n "$AIRLOCK_FIREFOX_PROFILE_DIR" ]]; then
-    AIRLOCK_FIREFOX_PROFILE_DIR="$(_expand_tilde "$AIRLOCK_FIREFOX_PROFILE_DIR")"
+    AIRLOCK_FIREFOX_PROFILE_DIR="$(_firefox_expand_tilde "$AIRLOCK_FIREFOX_PROFILE_DIR")"
   fi
   airlock_log "Using Firefox profile directory: $AIRLOCK_FIREFOX_PROFILE_DIR"
 }
-
-#_firefox_ensure_profile_dir() {
-#  [[ -n "$AIRLOCK_FIREFOX_PROFILE_DIR" ]] || airlock_die "Profile dir is empty"
-#  install -d -m 700 -- "$AIRLOCK_FIREFOX_PROFILE_DIR"
-#}
-#
-#
-#_apply_defaults() {
-#  if [[ "$AIRLOCK_FIREFOX_USE_SEPARATE_PROFILE" == 'true' && -z "$AIRLOCK_FIREFOX_PROFILE_DIR" ]]; then
-#    AIRLOCK_FIREFOX_PROFILE_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/airlock/firefox-${AIRLOCK_CONFIG_NAME}"
-#  fi
-#  AIRLOCK_FIREFOX_PROFILE_DIR="$(_expand_tilde "$AIRLOCK_FIREFOX_PROFILE_DIR")"
-#  airlock_log "Using Firefox profile directory: $AIRLOCK_FIREFOX_PROFILE_DIR"
-#}
 
 _firefox_user_home() {
   local user="${1:?user required}"
@@ -312,67 +264,5 @@ main() {
   # Persistent profile: exec is fine
   exec "$AIRLOCK_BIN" --config "$AIRLOCK_CONFIG" run -- "${firefox_cmd[@]}"
 }
-
-#main() {
-#  airlock_require_cmd firefox getent install mktemp rm
-#
-#  # Parse config/profile (so we know AIRLOCK_CONFIG_NAME for defaults)
-#  airlock_cli_select_config "$@"
-#  set -- "${AIRLOCK_CLI_REMAINING_ARGS[@]}"
-#
-#  # Parse wrapper options and collect remaining args to pass to Firefox
-#  local -a firefox_targets=()
-#  shift $((0)) # no-op, keep shellcheck calm
-#
-#  # Re-parse args again, but this time for firefox wrapper options (keep it simple)
-#  # We ignore --config/--profile here because _select_config already consumed them by re-reading $@ earlier.
-#  while (($# > 0)); do
-#    case "$1" in
-#      --config|--profile)
-#        # consume + ignore (already handled); keep compatibility if users repeat them
-#        shift; (($# > 0)) && shift || true ;;
-#      --separate-profile)
-#        AIRLOCK_FIREFOX_USE_SEPARATE_PROFILE='true'; shift ;;
-#      --no-separate-profile)
-#        AIRLOCK_FIREFOX_USE_SEPARATE_PROFILE='false'; shift ;;
-#      --profile-dir)
-#        (($# >= 2)) || airlock_die '--profile-dir requires a path'
-#        AIRLOCK_FIREFOX_PROFILE_DIR="$2"; shift 2 ;;
-#      -h|--help)
-#        usage; exit 0 ;;
-#      --)
-#        shift
-#        firefox_targets+=("$@")
-#        break ;;
-#      *)
-#        firefox_targets+=("$1"); shift ;;
-#    esac
-#  done
-#
-#  _apply_defaults
-#
-#  if [[ "$AIRLOCK_FIREFOX_USE_SEPARATE_PROFILE" == 'true' ]]; then
-#    _write_userjs
-#  fi
-#
-#  # 3) Build Firefox command argv
-#  local -a firefox_cmd=(firefox)
-#
-#  if [[ "$AIRLOCK_FIREFOX_USE_SEPARATE_PROFILE" == 'true' ]]; then
-#    firefox_cmd+=(-no-remote -profile "$AIRLOCK_FIREFOX_PROFILE_DIR")
-#  fi
-#
-#  firefox_cmd+=(-private-window)
-#
-#  if ((${#firefox_targets[@]} == 0)); then
-#    firefox_cmd+=(about:privatebrowsing)
-#  else
-#    firefox_cmd+=("${firefox_targets[@]}")
-#  fi
-#
-#  airlock_log "Launching Firefox via Airlock (profile='${AIRLOCK_CONFIG_NAME}', separate_profile=${AIRLOCK_FIREFOX_USE_SEPARATE_PROFILE})"
-#  airlock_log "Final Firefox command: ${firefox_cmd[*]}"
-#  exec "$AIRLOCK_BIN" --config "$AIRLOCK_CONFIG" run -- "${firefox_cmd[@]}"
-#}
 
 main "$@"
