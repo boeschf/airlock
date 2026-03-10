@@ -148,7 +148,7 @@ Minimal required variables for OpenConnect:
 - `OPENCONNECT_USER`
 - `AIRLOCK_AUTH_FUNCTION` (name of a function you define)
 
-Example pattern:
+Example config:
 
 ```bash
 AIRLOCK_CONFIG_NAME='myvpn'
