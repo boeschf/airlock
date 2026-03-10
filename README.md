@@ -12,7 +12,6 @@ Run a VPN connection in an isolated Linux **network namespace + mount namespace*
 - Config-driven authentication (no hard dependency on `pass`)
 - Works with **OpenConnect** (AnyConnect-compatible VPNs)
 
----
 
 ## Requirements
 
@@ -21,7 +20,6 @@ Run a VPN connection in an isolated Linux **network namespace + mount namespace*
 - Firewall backend: `nft` or `iptables`
 - Optional but common: `systemd-resolved` (handled)
 
----
 
 ## Installation
 
@@ -38,7 +36,6 @@ Uninstall:
 sudo make uninstall
 ```
 
----
 
 ## Quick start:
 
@@ -69,7 +66,6 @@ airlock --profile <name> run -- curl -sS https://api.ipify.org
 airlock --profile <name> down
 ```
 
----
 
 ## Default profile
 
@@ -91,7 +87,6 @@ You can also set one of these environment variables to specify a different defau
 - `AIRLOCK_DEFAULT_PROFILE=<name>`
 - `AIRLOCK_DEFAULT_CONFIG=<path/to/config>`
 
----
 
 ## `airlock-firefox` wrapper
 
@@ -123,7 +118,6 @@ Delete the configured profile directory (refuses if it appears in use):
 airlock-firefox --clean-profile
 ```
 
----
 
 ## Testing "does this actually go through the VPN?"
 
@@ -143,7 +137,6 @@ airlock run -- ip route get 1.1.1.1
 
 If the VPN is active, default routing should go via the VPN interface inside the namespace.
 
----
 
 ## Configuration overview
 
@@ -177,7 +170,6 @@ Notes:
 - You can fetch the password from anywhere (prompt, keyring, `pass`, etc)
 
 
----
 
 ## How it works
 
@@ -200,7 +192,6 @@ At a high level:
     * removes NAT rules and restores sysctl state
     * deletes the namespace
 
----
 
 ## Security notes
 
@@ -208,7 +199,6 @@ At a high level:
 - Auth payload is handled in-memory (no temp files by default).
 - The mount namespace design prevents common “DNS leakage” pitfalls on systemd-resolved systems.
 
----
 
 ## Inspiration / credit
 
@@ -219,7 +209,6 @@ This project is heavily inspired by:
 
 Thanks to those projects for documenting and demonstrating these patterns.
 
----
 
 ## Disclaimer
 
